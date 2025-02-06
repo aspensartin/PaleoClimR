@@ -23,34 +23,75 @@
 #' @import RNetCDF, dplyr, reshape2
 #' @export
 #'
-cGENIE.bathy.matching <- function(var, experiment, demfname, demzname) {
+
+    experiment <- "../f19b_biogemtest.SPIN"
+    var <- "ocn_O2"
+    demfname <- "../Map01_PALEOMAP_1deg_Holocene_0Ma.nc"
+    demzname <- "z"
 
     library(RNetCDF)
     library(dplyr)
     library(reshape2)
+    library(PaleoClimR)
 
     # Get dataframe of cGENIE grid and tracer values
-    df.cGENIE <- cGENIE.data.3D(var, experiment, "default", "biogem")
+    df_cGENIE <- cGENIE.data.3D(var, experiment,
+                                "default", "biogem")
     
     # Extract DEM lat/lon/depth
     nc <- open.nc(demfname)
     lat <- var.get.nc(nc, "lat")
     lon <- var.get.nc(nc, "lon")
-    depth <- var.get.nc(nc, demzname)
-
-    # Adjust DEM grid for longitude projection (to 0-360 degrees if needed)
-    if (mean(between(dem.lon, -180, 180)) < 1) {
-        dem.lon[dem.lon <= -180] <- dem.lon[dem.lon <= -180] + 360                            
-    }
+    depth <- var.get.nc(nc, "z")
+    # Set land to NA
+    depth[which(depth>=0)] <- NA
+    # Convert topography to depths
+    depth <- -depth
+    # Clip depths to range of cGENIE mid-layer depths
+    depth[depth < min(df_cGENIE$depth)] <- min(df_cGENIE$depth)
+    depth[depth > max(df_cGENIE$depth)] <- max(df_cGENIE$depth)
 
     # Create a dataframe for the DEM data
-    df.DEM <- as.data.frame(cbind(
+    df_DEM <- as.data.frame(cbind(
         rep(lon, times = length(lat), each = 1),
         rep(lat, times = 1, each = length(lon)),
         as.data.frame(melt(depth))$value))
-    names(df.DEM) <- c("lon", "lat", "depth")
+    names(df_DEM) <- c("lon", "lat", "depth")
 
+    # Adjust DEM grid for longitude projection (to 0-360 degrees if needed)
+    if (mean(between(df_DEM$lon, -180, 180)) < 1) {
+        df_DEM$lon[df_DEM$lon <= -180] <- df_DEM$lon[df_DEM$lon <= -180] + 360                            
+    }
 
+    # Generate LOESS models for each unique lat/lon
+    loess_models <- df_cGENIE %>%
+    group_by(lat.mid, lon.mid) %>%
+    # Exclude cells where var is NA over all depths (i.e. land cells)
+    filter(!all(is.nan(var))) %>%
+    summarize(
+        model = list(loess(var ~ depth, 
+            data = cur_data(), 
+            na.action = na.exclude,
+            span = 0.5,
+            degree = 2,
+            )
+        )
+    )
 
-
-                                }
+    # Estimate var at each DEM point using closest LOESS model in lat/lon space
+    df_DEM <- df_DEM %>%
+    rowwise() %>%
+    mutate(
+        var = {
+            predict(loess_models$model[[
+                which.min(
+                    sqrt(
+                        (loess_models$lat.mid - lat)^2 
+                        + (loess_models$lon.mid - lon)^2
+                    )
+                )
+            ]], 
+            depth)
+        }
+    )
+      
