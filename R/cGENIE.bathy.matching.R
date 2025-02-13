@@ -1,10 +1,6 @@
 #' cGENIE Bathymetry Matching
 #'
-#' This function matches a cGENIE 3D tracer field to bathymetry from a (palaeo)
-#' digital elevation model (DEM). It interpolates values for the chosen tracer
-#' at the depth of each DEM point from the nearest cGENIE grid cell using a
-#' locally-smoothed depth profile of the tracer in that cell. The function
-#' returns a dataframe of depths and interpolated values.
+#' [function description]
 #'
 #' @param var A string specifying the variable name to extract from the NetCDF
 #'              file. Examples include "ocn_temp", "ocn_O2", etc.
@@ -32,11 +28,18 @@
     library(RNetCDF)
     library(dplyr)
     library(reshape2)
+    library(interp)
     library(PaleoClimR)
+    library(doParallel)
+
+    registerDoParallel(cores = 4)
 
     # Get dataframe of cGENIE grid and tracer values
     df_cGENIE <- cGENIE.data.3D(var, experiment,
                                 "default", "biogem")
+
+    df_cGENIE <- df_cGENIE %>%
+        filter(is.finite(var))                            
     
     # Extract DEM lat/lon/depth
     nc <- open.nc(demfname)
@@ -51,7 +54,7 @@
     depth[depth < min(df_cGENIE$depth)] <- min(df_cGENIE$depth)
     depth[depth > max(df_cGENIE$depth)] <- max(df_cGENIE$depth)
 
-    # Create a dataframe for the DEM data
+    # Create DEM dataframe
     df_DEM <- as.data.frame(cbind(
         rep(lon, times = length(lat), each = 1),
         rep(lat, times = 1, each = length(lon)),
@@ -63,35 +66,33 @@
         df_DEM$lon[df_DEM$lon <= -180] <- df_DEM$lon[df_DEM$lon <= -180] + 360                            
     }
 
-    # Generate LOESS models for each unique lat/lon
-    loess_models <- df_cGENIE %>%
-    group_by(lat.mid, lon.mid) %>%
-    # Exclude cells where var is NA over all depths (i.e. land cells)
-    filter(!all(is.nan(var))) %>%
-    summarize(
-        model = list(loess(var ~ depth, 
-            data = cur_data(), 
-            na.action = na.exclude,
-            span = 0.5,
-            degree = 2,
-            )
-        )
-    )
+    # Interpolate cGENIE var field to DEM grid for each depth level
+    df_interp_all <- foreach(d = unique(df_cGENIE$depth), .combine = rbind, .packages = c('dplyr', 'interp')) %dopar% {
+        df_filt <- filter(df_cGENIE, depth == d)
 
-    # Estimate var at each DEM point using closest LOESS model in lat/lon space
-    df_DEM <- df_DEM %>%
-    rowwise() %>%
-    mutate(
-        var = {
-            predict(loess_models$model[[
-                which.min(
-                    sqrt(
-                        (loess_models$lat.mid - lat)^2 
-                        + (loess_models$lon.mid - lon)^2
-                    )
-                )
-            ]], 
-            depth)
-        }
-    )
-      
+        interp_result <- interp(
+            x = df_filt$lon.mid,
+            y = df_filt$lat.mid,
+            z = df_filt$var,
+            xo = df_DEM$lon,
+            yo = df_DEM$lat,
+            output = "points",
+            method = "akima",
+            extrap = TRUE
+        )
+
+        df_interp <- data.frame(
+            lon = as.vector(interp_result$x),
+            lat = as.vector(interp_result$y),
+            var = as.vector(interp_result$z),
+            depth = d
+        )
+
+        write.table(df_interp, 
+            file = paste0("interp_", ocn_02, "_", as.integer(d), "m.txt"), 
+            sep = "\t", 
+            row.names = FALSE, 
+            col.names = TRUE) 
+
+        df_interp
+}
