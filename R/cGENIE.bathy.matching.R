@@ -66,6 +66,9 @@
         df_DEM$lon[df_DEM$lon <= -180] <- df_DEM$lon[df_DEM$lon <= -180] + 360                            
     }
 
+    df_cGENIE$lon.mid <- df_cGENIE$lon.mid + rnorm(nrow(df_cGENIE), 0, 0.1)
+    df_cGENIE$lat.mid <- df_cGENIE$lat.mid + rnorm(nrow(df_cGENIE), 0, 0.1)
+
     # Interpolate cGENIE var field to DEM grid for each depth level
     df_interp_all <- foreach(d = unique(df_cGENIE$depth), .combine = rbind, .packages = c('dplyr', 'interp')) %dopar% {
         df_filt <- filter(df_cGENIE, depth == d)
@@ -89,7 +92,7 @@
         )
 
         write.table(df_interp, 
-            file = paste0("interp_", ocn_02, "_", as.integer(d), "m.txt"), 
+            file = paste0("interp_", var, "_", as.integer(d), "m.txt"), 
             sep = "\t", 
             row.names = FALSE, 
             col.names = TRUE) 
