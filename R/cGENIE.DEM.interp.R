@@ -136,15 +136,15 @@ cGENIE.DEM.interp <- function(experiment, var, dem, zname){
                         slice_min(dist, n = 1)
                     # Interpolate using the closest point
                     approx(
-                                x = layer$depth,
-                                y = layer$var,
-                                xout = depth
+                        x = layer$depth,
+                        y = layer$var,
+                        xout = depth
                     )$y
                 }
-                }
-            )
-        ) %>%
-        ungroup()
+            }
+        )
+    ) %>%
+    ungroup()
 
     # Make plot
     ggplot(df_DEM, aes(x = lon, y = lat, fill = var_interp)) +
