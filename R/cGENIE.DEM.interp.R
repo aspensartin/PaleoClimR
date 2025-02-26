@@ -34,8 +34,10 @@ cGENIE.DEM.interp <- function(experiment, var, dem, zname){
     library(sf)
 
     # Extract cGENIE data
-    df_cGENIE <- cGENIE.data.3D(var, experiment, "default", "biogem")
-    depths_cGENIE <- as.data.frame(sort(unique(df_cGENIE$depth)))
+    df_cGENIE <- cGENIE.data.3D("ocn_O2", expt, "default", "biogem")
+    depths_cGENIE <- as.data.frame(sort(unique(filter(df_cGENIE, !is.na(df_cGENIE$var))$depth)))
+    names(depths_cGENIE) <- "depth"
+
 
     # Extract DEM data and compile to dataframe
     nc <- open.nc(dem)
@@ -66,18 +68,17 @@ cGENIE.DEM.interp <- function(experiment, var, dem, zname){
 
     #   srf_cGENIE: cells in top layer with valid value of var
     srf_cGENIE <- df_cGENIE %>%
-        filter(depth == min(df_cGENIE$depth) & !is.na(var))
+        filter(depth == min(depths_cGENIE$depth) & !is.na(var))
 
     #   ben_cGENIE: cells in bottom layer with valid value of var
     ben_cGENIE <- df_cGENIE %>%
-        filter(depth == max(df_cGENIE$depth) & !is.na(var))
+        filter(depth == max(depths_cGENIE$depth) & !is.na(var))
 
     #   layers_cGENIE: list of dataframes, each containing two consecutive
     #   depth layers, with cells where var is valid across both layers
-    layers_cGENIE <- lapply(1:(length(unique(df_cGENIE$depth))-1), function(i) {
-        depths <- sort(unique(df_cGENIE$depth))
-        d1 <- depths[i]
-        d2 <- depths[i+1]
+    layers_cGENIE <- lapply(1:(length(depths_cGENIE$depth)-1), function(i) {
+        d1 <- depths_cGENIE$depth[i]
+        d2 <- depths_cGENIE$depth[i+1]
         
         df_cGENIE %>%
             # Filter to just these two depths
@@ -89,18 +90,13 @@ cGENIE.DEM.interp <- function(experiment, var, dem, zname){
             ungroup()
     })
 
-    names(layers_cGENIE) <- sapply(1:(length(unique(df_cGENIE$depth))-1), function(i) {
-        depths <- sort(unique(df_cGENIE$depth))
-        sprintf("%g", depths[i])
-    })
-
     # Assign a value of var for each DEM point
     df_DEM <- df_DEM %>%
         rowwise() %>%
         mutate(
             var_interp = case_when(
                 # Shallow case:
-                depth <= min(df_cGENIE$depth) ~ {
+                depth <= min(depths_cGENIE$depth) ~ {
                     layer <- srf_cGENIE %>%
                         # Assign distance from point to cells
                         mutate(dist = sqrt((lon.mid - lon)^2 + (lat.mid - lat)^2)) %>%
@@ -111,7 +107,7 @@ cGENIE.DEM.interp <- function(experiment, var, dem, zname){
                 },
                 
                 # Deep case:
-                depth >= max(df_cGENIE$depth) ~ {
+                depth >= max(depths_cGENIE$depth) ~ {
                     layer <- ben_cGENIE %>%
                         # Assign distance from point to cells
                         mutate(dist = sqrt((lon.mid - lon)^2 + (lat.mid - lat)^2)) %>%
@@ -124,16 +120,15 @@ cGENIE.DEM.interp <- function(experiment, var, dem, zname){
                 # Intermediate case:
                 TRUE ~ {
                     # Find name of correct layer in layers_cGENIE
-                    target_depth <- sprintf("%g", max(filter(depths_cGENIE, depths_cGENIE < depth)))
+                    target_depth <- findInterval(depth, depths_cGENIE$depth, all.inside = TRUE)
                     layer <- layers_cGENIE[[target_depth]]
                     if (is.null(layer)){
                         NA
-                    }
-                    else {
+                    } else {
                     # Assign distance from point to cells
-                    mutate(layer, dist = sqrt((lon.mid - lon)^2 + (lat.mid - lat)^2)) %>%
+                    layer <- mutate(layer, dist = sqrt((lon.mid - lon)^2 + (lat.mid - lat)^2))
                         # Slice closest point
-                        slice_min(dist, n = 1)
+                    layer <- slice_min(layer, dist, n = 1)
                     # Interpolate using the closest point
                     approx(
                         x = layer$depth,
@@ -147,16 +142,26 @@ cGENIE.DEM.interp <- function(experiment, var, dem, zname){
     ungroup()
 
     # Make plot
-    ggplot(df_DEM, aes(x = lon, y = lat, fill = var_interp)) +
-        geom_raster() +
-        geom_rect( 
-                aes(xmin = -180, xmax = 180, ymin = -90, ymax = 90),
-                fill = alpha("grey", 0), linewidth = 0.1, colour = "black"
-                ) +
-        scale_fill_viridis_c(limits = c(0, 0.0003), oob = scales::squish, name=var) +
-        coord_quickmap() +
-        theme_bw()
-    ggsave(paste(experiment, "interp", var, ".png", sep="_" ))
+    interp_plot <- print(
+        ggplot(df_DEM, aes(x = lon, y = lat, fill = var_interp)) +
+            geom_raster() +
+            geom_rect( 
+                    aes(xmin = -180, xmax = 180, ymin = -90, ymax = 90),
+                    fill = alpha("grey", 0), linewidth = 0.1, colour = "black"
+                    ) +
+            scale_fill_viridis_c(limits = c(0, 0.0003), oob = scales::squish, name = "ocn_O2") +
+            coord_quickmap() +
+            ggtitle(expt) +
+            theme_bw()
+    )
+
+    ggsave(paste(expt, "interp_fixed.png", sep = "_" ))
+    
+    # Save df
+    write.table(
+        df_DEM,
+        file = paste(expt, "interp.txt", sep = "_")
+    )
 
     return(df_DEM)
 }
