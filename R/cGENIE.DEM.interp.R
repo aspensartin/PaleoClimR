@@ -24,7 +24,7 @@
 #' @import RNetCDF, dplyr, reshape2, ggplot2, RNetCDF, sf
 #' @export
 
-cGENIE.DEM.interp <- function(experiment, var, dem, zname){
+cGENIE.DEM.interp <- function(expt, var, dem){
 
     library(dplyr)
     library(reshape2)
@@ -34,7 +34,7 @@ cGENIE.DEM.interp <- function(experiment, var, dem, zname){
     library(sf)
 
     # Extract cGENIE data
-    df_cGENIE <- cGENIE.data.3D("ocn_O2", expt, "default", "biogem")
+    df_cGENIE <- cGENIE.data.3D(var, expt, "default", "biogem")
     depths_cGENIE <- as.data.frame(sort(unique(filter(df_cGENIE, !is.na(df_cGENIE$var))$depth)))
     names(depths_cGENIE) <- "depth"
 
@@ -149,18 +149,18 @@ cGENIE.DEM.interp <- function(experiment, var, dem, zname){
                     aes(xmin = -180, xmax = 180, ymin = -90, ymax = 90),
                     fill = alpha("grey", 0), linewidth = 0.1, colour = "black"
                     ) +
-            scale_fill_viridis_c(limits = c(0, 0.0003), oob = scales::squish, name = "ocn_O2") +
+            scale_fill_viridis_c(name = var) +
             coord_quickmap() +
             ggtitle(expt) +
             theme_bw()
     )
 
-    ggsave(paste(expt, "interp_fixed.png", sep = "_" ))
+    ggsave(paste(expt, var, "interp.png", sep = "_" ))
     
     # Save df
     write.table(
         df_DEM,
-        file = paste(expt, "interp.txt", sep = "_")
+        file = paste(expt, var, "interp.txt", sep = "_")
     )
 
     return(df_DEM)
